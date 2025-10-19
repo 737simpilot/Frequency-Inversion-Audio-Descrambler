@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audio Frequency Inversion</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+    }
+    label {
+      display: inline-block;
+      width: 150px;
+    }
+    #frequencySlider {
+      width: 300px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Frequency Inversion Audio Descrambler</h1>
+
+  <!-- Dropdowns for selecting input and output devices -->
+  <label for="inputSource">Select Microphone Input:</label>
+  <select id="inputSource"></select>
+  <br><br>
+
+  <label for="outputSource">Select Audio Output:</label>
+  <select id="outputSource"></select>
+  <br><br>
+
+  <!-- File upload for audio -->
+  <label for="audioFile">Upload Audio File:</label>
+  <input type="file" id="audioFile" accept="audio/*">
+  <br><br>
+
+  <!-- Frequency Slider -->
+  <label for="frequencySlider">Frequency Inversion Point:</label>
+  <input type="range" id="frequencySlider" min="100" max="5000" value="1000" step="10">
+  <span id="frequencyValue">1000 Hz</span>
+  <br><br>
+
+  <!-- Controls for file-based audio playback -->
+  <button id="playButton" disabled>Play</button>
+  <button id="pauseButton" disabled>Pause</button>
+  <button id="stopButton" disabled>Stop</button>
+  <label>
+    <input type="checkbox" id="repeatToggle"> Repeat
+  </label>
+  <br><br>
+
+  <!-- Controls for live audio processing -->
+  <button id="startProcessingButton">Start Processing Live Audio</button>
+  <button id="stopProcessingButton" disabled>Stop Processing Live Audio</button>
+
+  <script>
+    let audioContext;
+    let inputStream;
+    let sourceNode;
+    let gainNode;
+    let analyserNode;
+    let outputStream;
+    let audioBufferSourceNode;
+    let uploadedBuffer;
+    let isPlaying = false;
+    let isProcessingLive = false;
+    let startTime = 0;
+    let centralFrequency = 1000; // Default central frequency for inversion
+
+    const inputSourceSelect = document.getElementById('inputSource');
+    const outputSourceSelect = document.getElementById('outputSource');
+    const audioFileInput = document.getElementById('audioFile');
+    const playButton = document.getElementById('playButton');
+    const pauseButton = document.getElementById('pauseButton');
+    const stopButton = document.getElementById('stopButton');
+    const repeatToggle = document.getElementById('repeatToggle');
+    const startProcessingButton = document.getElementById('startProcessingButton');
+    const stopProcessingButton = document.getElementById('stopProcessingButton');
+    const frequencySlider = document.getElementById('frequencySlider');
+    const frequencyValue = document.getElementById('frequencyValue');
+
+    // Function to update the displayed frequency value
+    frequencySlider.addEventListener('input', () => {
+      centralFrequency = frequencySlider.value;
+      frequencyValue.textContent = centralFrequency + ' Hz';
+    });
+
+    // Function to list available audio devices
+    async function getAudioDevices() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(device => device.kind === 'audioinput');
+      const audioOutputs = devices.filter(device => device.kind === 'audiooutput');
+
+      inputSourceSelect.innerHTML = audioInputs.map((device) => `<option value="${device.deviceId}">${device.label || 'Microphone ' + device.deviceId}</option>`).join('');
+      outputSourceSelect.innerHTML = audioOutputs.map((device) => `<option value="${device.deviceId}">${device.label || 'Output ' + device.deviceId}</option>`).join('');
+    }
+
+    // Handle file upload
+    audioFileInput.addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+      if (file) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const fileReader = new FileReader();
+        fileReader.onload = async function() {
+          const arrayBuffer = fileReader.result;
+          uploadedBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+          // Enable audio control buttons once the file is loaded
+          playButton.disabled = false;
+          pauseButton.disabled = false;
+          stopButton.disabled = false;
+        };
+        fileReader.readAsArrayBuffer(file);
+      }
+    });
+
+    // Play the uploaded audio file with frequency inversion
+    playButton.addEventListener('click', () => {
+      if (!isPlaying) {
+        playAudioWithFrequencyInversion();
+        isPlaying = true;
+        startTime = audioContext.currentTime;
+      }
+    });
+
+    // Pause the audio
+    pauseButton.addEventListener('click', () => {
+      if (isPlaying) {
+        audioBufferSourceNode.stop();
+        isPlaying = false;
+      }
+    });
+
+    // Stop the audio and reset
+    stopButton.addEventListener('click', () => {
+      if (isPlaying) {
+        audioBufferSourceNode.stop();
+        isPlaying = false;
+      }
+      startTime = 0; // Reset playback time
+    });
+
+    // Function to play the uploaded audio with frequency inversion
+    function playAudioWithFrequencyInversion() {
+      if (!uploadedBuffer) return;
+
+      audioBufferSourceNode = audioContext.createBufferSource();
+      audioBufferSourceNode.buffer = uploadedBuffer;
+      audioBufferSourceNode.loop = repeatToggle.checked;
+
+      gainNode = audioContext.createGain();
+
+      const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+      scriptNode.onaudioprocess = (audioProcessingEvent) => {
+        const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+        const outputData = audioProcessingEvent.outputBuffer.getChannelData(0);
+
+        for (let i = 0; i < inputData.length; i++) {
+          // Inverting frequency components manually
+          const shifted = Math.sin(centralFrequency / audioContext.sampleRate * 2 * Math.PI * i);
+          outputData[i] = inputData[i] * shifted;
+        }
+      };
+
+      audioBufferSourceNode.connect(scriptNode);
+      scriptNode.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      audioBufferSourceNode.start(0, startTime);
+    }
+
+    // Start processing live microphone input with frequency inversion
+    startProcessingButton.addEventListener('click', async () => {
+      if (!isProcessingLive) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+        // Get the selected input source (microphone)
+        const inputSource = inputSourceSelect.value;
+        inputStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: inputSource ? { exact: inputSource } : undefined } });
+
+        sourceNode = audioContext.createMediaStreamSource(inputStream);
+
+        gainNode = audioContext.createGain();
+
+        const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+        scriptNode.onaudioprocess = (audioProcessingEvent) => {
+          const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+          const outputData = audioProcessingEvent.outputBuffer.getChannelData(0);
+
+          for (let i = 0; i < inputData.length; i++) {
+            // Apply frequency inversion by flipping frequencies
+            const shifted = Math.sin(centralFrequency / audioContext.sampleRate * 2 * Math.PI * i);
+            outputData[i] = inputData[i] * shifted;
+          }
+        };
+
+        sourceNode.connect(scriptNode);
+        scriptNode.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        isProcessingLive = true;
+
+        // Enable stop button and disable start button
+        startProcessingButton.disabled = true;
+        stopProcessingButton.disabled = false;
+      }
+    });
+
+    // Stop processing live microphone input
+    stopProcessingButton.addEventListener('click', () => {
+      if (isProcessingLive) {
+        inputStream.getTracks().forEach(track => track.stop());
+        isProcessingLive = false;
+
+        // Enable start button and disable stop button
+        startProcessingButton.disabled = false;
+        stopProcessingButton.disabled = true;
+      }
+    });
+
+    // Initialize the available devices on page load
+    getAudioDevices();
+  </script>
+</body>
+</html>
